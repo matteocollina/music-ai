@@ -1,4 +1,4 @@
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import * as Tone from "tone";
 import { Midi } from "@tonejs/midi";
@@ -44,12 +44,25 @@ type LoopClip = {
 };
 
 type EngineHandle = {
+  builtForSignature: string | null;
   dispose: () => void;
   parts: Tone.Part[];
   players: Tone.Player[];
   raf: number | null;
+  ready: boolean;
   synths: Tone.PolySynth[];
   volumes: Tone.Volume[];
+};
+
+type ResizeSide = "left" | "right";
+
+type ResizeState = {
+  clipId: string;
+  initialBars: number;
+  initialRectWidth: number;
+  initialStartBar: number;
+  pointerX: number;
+  side: ResizeSide;
 };
 
 const palette = [
@@ -68,10 +81,12 @@ const transportNumerator = 4;
 
 function createEmptyEngine(): EngineHandle {
   return {
+    builtForSignature: null,
     dispose: () => undefined,
     parts: [],
     players: [],
     raf: null,
+    ready: false,
     synths: [],
     volumes: [],
   };
@@ -248,6 +263,7 @@ function App() {
   const [errorLine, setErrorLine] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const engineRef = useRef<EngineHandle>(createEmptyEngine());
+  const resizeStateRef = useRef<ResizeState | null>(null);
 
   const lanes = useMemo(() => {
     const dynamic = clips.map((clip) => clip.lane.trim()).filter(Boolean);
@@ -264,6 +280,24 @@ function App() {
     return Math.max(visibleBars, clipBars + 2);
   }, [clips]);
 
+  const clipSignature = useMemo(
+    () =>
+      JSON.stringify(
+        clips.map((clip) => ({
+          bars: clip.bars,
+          id: clip.id,
+          kind: clip.kind,
+          lane: clip.lane,
+          muted: clip.muted,
+          objectUrl: clip.objectUrl,
+          sourceBpm: clip.sourceBpm,
+          startBar: clip.startBar,
+          volume: clip.volume,
+        })),
+      ),
+    [clips],
+  );
+
   useEffect(() => {
     void refreshApiKeyStatus();
 
@@ -273,6 +307,75 @@ function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const isTypingTarget =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable;
+
+      if (isTypingTarget) return;
+      if (event.code !== "Space") return;
+
+      event.preventDefault();
+      void togglePlayPause();
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    function onPointerMove(event: PointerEvent) {
+      const resizeState = resizeStateRef.current;
+      if (!resizeState) return;
+
+      const deltaBars = Math.round((event.clientX - resizeState.pointerX) / Math.max(24, resizeState.initialRectWidth / resizeState.initialBars));
+
+      if (resizeState.side === "right") {
+        updateClip(resizeState.clipId, {
+          bars: Math.max(1, resizeState.initialBars + deltaBars),
+        });
+        return;
+      }
+
+      const endBar = resizeState.initialStartBar + resizeState.initialBars;
+      const nextStartBar = clamp(resizeState.initialStartBar + deltaBars, 0, endBar - 1);
+      updateClip(resizeState.clipId, {
+        bars: Math.max(1, endBar - nextStartBar),
+        startBar: nextStartBar,
+      });
+    }
+
+    function onPointerUp() {
+      resizeStateRef.current = null;
+    }
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine.ready) return;
+    if (engine.builtForSignature === clipSignature && Tone.Transport.state !== "stopped") return;
+
+    stopPlayback();
+    setStatusLine("Arrangement updated. Press play to rebuild the transport.");
+  }, [clipSignature]);
+
+  useEffect(() => {
+    if (Tone.Transport.state === "started") {
+      stopPlayback();
+      setStatusLine(`BPM changed to ${bpm}. Press play to restart the transport.`);
+    }
+  }, [bpm]);
 
   async function refreshApiKeyStatus() {
     try {
@@ -305,6 +408,16 @@ function App() {
     setIsPlaying(false);
   }
 
+  function pausePlayback() {
+    Tone.Transport.pause();
+    if (engineRef.current.raf !== null) {
+      window.cancelAnimationFrame(engineRef.current.raf);
+      engineRef.current.raf = null;
+    }
+    setIsPlaying(false);
+    setStatusLine(`Playback paused at bar ${transportBar.toFixed(2)}.`);
+  }
+
   function tickPlayhead() {
     const secondsPerBar = (60 / bpm) * transportNumerator;
     const nextBar = (Tone.Transport.seconds / secondsPerBar) % visibleBars;
@@ -312,10 +425,10 @@ function App() {
     engineRef.current.raf = window.requestAnimationFrame(tickPlayhead);
   }
 
-  async function startPlayback() {
+  async function buildEngine() {
     if (!clips.length) {
       setStatusLine("Import at least one loop before starting playback.");
-      return;
+      return false;
     }
 
     await Tone.start();
@@ -384,17 +497,43 @@ function App() {
     }
 
     engineRef.current = {
+      builtForSignature: clipSignature,
       dispose: () => undefined,
       parts,
       players,
       raf: window.requestAnimationFrame(tickPlayhead),
+      ready: true,
       synths,
       volumes,
     };
 
+    return true;
+  }
+
+  async function startPlayback() {
+    const didBuild = await buildEngine();
+    if (!didBuild) return;
+
     Tone.Transport.start("+0.01");
     setIsPlaying(true);
     setStatusLine(`Playback running at ${bpm} BPM.`);
+  }
+
+  async function togglePlayPause() {
+    if (Tone.Transport.state === "started") {
+      pausePlayback();
+      return;
+    }
+
+    if (Tone.Transport.state === "paused" && engineRef.current.ready) {
+      engineRef.current.raf = window.requestAnimationFrame(tickPlayhead);
+      Tone.Transport.start("+0.01");
+      setIsPlaying(true);
+      setStatusLine(`Playback resumed at ${bpm} BPM.`);
+      return;
+    }
+
+    await startPlayback();
   }
 
   async function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
@@ -439,6 +578,49 @@ function App() {
       if (selectedClipId === id) setSelectedClipId(next[0]?.id ?? null);
       return next;
     });
+  }
+
+  function splitClip(clipId: string, splitOffsetBars: number) {
+    setClips((current) => {
+      const clip = current.find((entry) => entry.id === clipId);
+      if (!clip) return current;
+      if (splitOffsetBars <= 0 || splitOffsetBars >= clip.bars) return current;
+
+      const leftBars = splitOffsetBars;
+      const rightBars = clip.bars - splitOffsetBars;
+      const leftClip: LoopClip = { ...clip, bars: leftBars, name: `${clip.name} A` };
+      const rightClip: LoopClip = {
+        ...clip,
+        bars: rightBars,
+        id: createId(),
+        name: `${clip.name} B`,
+        startBar: clip.startBar + splitOffsetBars,
+      };
+
+      return current.flatMap((entry) => {
+        if (entry.id !== clipId) return [entry];
+        return [leftClip, rightClip];
+      });
+    });
+
+    setStatusLine("Clip split in the arranger.");
+  }
+
+  function beginResize(event: ReactPointerEvent<HTMLSpanElement>, clip: LoopClip, side: ResizeSide) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const clipRect = event.currentTarget.parentElement?.getBoundingClientRect();
+    if (!clipRect) return;
+
+    resizeStateRef.current = {
+      clipId: clip.id,
+      initialBars: clip.bars,
+      initialRectWidth: clipRect.width,
+      initialStartBar: clip.startBar,
+      pointerX: event.clientX,
+      side,
+    };
   }
 
   async function saveApiKey() {
@@ -711,8 +893,11 @@ function App() {
           </div>
 
           <div className="transport">
-            <button className="transport-button" onClick={() => void (isPlaying ? stopPlayback() : startPlayback())} type="button">
-              {isPlaying ? "Stop" : "Play"}
+            <button className="transport-button" onClick={() => void togglePlayPause()} type="button">
+              {isPlaying ? "Pause" : "Play"}
+            </button>
+            <button className="ghost-button" onClick={stopPlayback} type="button">
+              Stop
             </button>
             <div className="transport-readout">
               <span>{bpm} BPM</span>
@@ -761,13 +946,25 @@ function App() {
                     <button
                       className={`timeline-clip ${selectedClip?.id === clip.id ? "selected" : ""}`}
                       key={clip.id}
-                      onClick={() => setSelectedClipId(clip.id)}
+                      onClick={(event) => {
+                        if (event.shiftKey) {
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          const relative = clamp((event.clientX - rect.left) / Math.max(rect.width, 1), 0, 0.999);
+                          const splitOffsetBars = Math.max(1, Math.floor(relative * clip.bars));
+                          splitClip(clip.id, splitOffsetBars);
+                          return;
+                        }
+
+                        setSelectedClipId(clip.id);
+                      }}
                       style={{
                         background: `linear-gradient(135deg, ${clip.color}, color-mix(in srgb, ${clip.color} 58%, #ffebd2))`,
                         gridColumn: `${clip.startBar + 2} / span ${clip.bars}`,
                       }}
                       type="button"
                     >
+                      <span className="resize-handle left" onPointerDown={(event) => beginResize(event, clip, "left")} />
+                      <span className="resize-handle right" onPointerDown={(event) => beginResize(event, clip, "right")} />
                       <span>{clip.name}</span>
                       <small>
                         {clip.kind} • {clip.sourceBpm} BPM

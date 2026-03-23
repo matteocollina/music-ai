@@ -437,6 +437,34 @@ input[type="number"],
   z-index: 2;
 }
 
+.resize-handle {
+  bottom: 8px;
+  position: absolute;
+  top: 8px;
+  width: 12px;
+}
+
+.resize-handle.left {
+  cursor: ew-resize;
+  left: 4px;
+}
+
+.resize-handle.right {
+  cursor: ew-resize;
+  right: 4px;
+}
+
+.resize-handle::after {
+  background: rgba(25, 15, 6, 0.24);
+  border-radius: 999px;
+  bottom: 10px;
+  content: "";
+  left: 4px;
+  position: absolute;
+  top: 10px;
+  width: 4px;
+}
+
 .timeline-clip span {
   font-weight: 800;
 }
