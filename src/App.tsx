@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 type ScaleMode = "major" | "minor";
@@ -34,11 +34,16 @@ type GeneratedMidi = {
   url: string;
 };
 
-type ResponseEnvelope = {
-  output?: Array<{
-    content?: Array<{ text?: string; type?: string }>;
+type ChatCompletionEnvelope = {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+      refusal?: string | null;
+    };
   }>;
-  output_text?: string;
+  error?: {
+    message?: string;
+  };
 };
 
 const BPM_OPTIONS = [90, 100, 110, 120, 124, 128, 132, 140];
@@ -205,90 +210,47 @@ function buildMidiBytes(plan: MidiPlan, bpm: number, key: KeyOption) {
   ]);
 }
 
-function extractOutputText(response: ResponseEnvelope) {
-  if (typeof response.output_text === "string" && response.output_text.trim()) {
-    return response.output_text;
-  }
-
-  const chunks =
-    response.output?.flatMap((item) => item.content?.map((content) => content.text?.trim()).filter(Boolean) ?? []) ?? [];
-
-  return chunks.join("\n");
+function isMidiPlan(value: unknown): value is MidiPlan {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as { notes?: unknown; title?: unknown };
+  return typeof candidate.title === "string" && Array.isArray(candidate.notes);
 }
 
 async function requestMidiPlan(apiKey: string, sentiment: string, bpm: number, bars: number, key: KeyOption) {
-  const schema = {
-    additionalProperties: false,
-    properties: {
-      notes: {
-        items: {
-          additionalProperties: false,
-          properties: {
-            degree: { type: "integer" },
-            durationBeats: { type: "number" },
-            octave: { type: "integer" },
-            startBeat: { type: "number" },
-            velocity: { type: "integer" },
-          },
-          required: ["startBeat", "durationBeats", "degree", "octave", "velocity"],
-          type: "object",
-        },
-        minItems: 8,
-        type: "array",
-      },
-      title: { type: "string" },
-    },
-    required: ["title", "notes"],
-    type: "object",
-  };
-
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
     body: JSON.stringify({
-      input: [
+      messages: [
         {
           content: [
-            {
-              text: [
-                "You are a MIDI composition planner for a desktop music app.",
-                "Return only structured data for a single-track piano performance.",
-                "The melody must fit 4/4, stay inside the selected key, and feel loopable.",
-                "Use scale degrees 1-7 relative to the requested key instead of raw MIDI pitches.",
-                "Prefer musical phrasing, repetition, and small variations over random notes.",
-                "Keep the arrangement dense enough to feel intentional, but avoid chaos.",
-              ].join(" "),
-              type: "input_text",
-            },
-          ],
-          role: "system",
+            "You are a MIDI composition planner for a desktop music app.",
+            "Return only valid JSON for a single-track piano performance.",
+            "The melody must fit 4/4, stay inside the selected key, and feel loopable.",
+            "Use scale degrees 1-7 relative to the requested key instead of raw MIDI pitches.",
+            "Prefer musical phrasing, repetition, and small variations over random notes.",
+            "Keep the arrangement dense enough to feel intentional, but avoid chaos.",
+            'JSON shape: {"title":"string","notes":[{"startBeat":number,"durationBeats":number,"degree":integer 1-7,"octave":integer 3-6,"velocity":integer 48-120}]}',
+          ].join(" "),
+          role: "system" as const,
         },
         {
           content: [
-            {
-              text: [
-                `Sentiment: ${sentiment}`,
-                `Tempo: ${bpm} BPM`,
-                `Bars: ${bars}`,
-                `Key: ${key.label}`,
-                `Scale mode: ${key.mode}`,
-                "Generate a memorable piano idea with emotional contour matching the sentiment.",
-                "Notes must stay within octaves 3 to 6 and velocities 48 to 120.",
-                "Use startBeat values within the full loop length and durationBeats from 0.25 to 4.",
-              ].join("\n"),
-              type: "input_text",
-            },
-          ],
-          role: "user",
+            `Sentiment: ${sentiment}`,
+            `Tempo: ${bpm} BPM`,
+            `Bars: ${bars}`,
+            `Key: ${key.label}`,
+            `Scale mode: ${key.mode}`,
+            "Generate a memorable piano idea with emotional contour matching the sentiment.",
+            "Notes must stay within octaves 3 to 6 and velocities 48 to 120.",
+            "Use startBeat values within the full loop length and durationBeats from 0.25 to 4.",
+            "Respond with JSON only. No markdown, no explanation, no code fences.",
+          ].join("\n"),
+          role: "user" as const,
         },
       ],
-      max_output_tokens: 1800,
-      model: "gpt-5-mini",
-      text: {
-        format: {
-          name: "midi_plan",
-          schema,
-          strict: true,
-          type: "json_schema",
-        },
+      max_completion_tokens: 1800,
+      model: "gpt-4o-mini",
+      response_format: {
+        type: "json_object",
       },
     }),
     headers: {
@@ -298,17 +260,67 @@ async function requestMidiPlan(apiKey: string, sentiment: string, bpm: number, b
     method: "POST",
   });
 
-  const payload = (await response.json()) as ResponseEnvelope & { error?: { message?: string } };
+  const payload = (await response.json()) as ChatCompletionEnvelope;
   if (!response.ok) {
     throw new Error(payload.error?.message || "OpenAI request failed.");
   }
 
-  const outputText = extractOutputText(payload);
-  if (!outputText) {
-    throw new Error("OpenAI returned no text output.");
+  const choice = payload.choices?.[0]?.message;
+  if (choice?.refusal?.trim()) {
+    throw new Error(choice.refusal);
   }
 
-  return JSON.parse(outputText) as MidiPlan;
+  if (choice?.content?.trim()) {
+    const parsed = JSON.parse(choice.content);
+    if (isMidiPlan(parsed)) {
+      return parsed;
+    }
+  }
+
+  throw new Error("OpenAI did not return a valid MIDI JSON payload.");
+}
+
+async function previewMidiPlan(plan: MidiPlan, bpm: number, key: KeyOption) {
+  const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextCtor) {
+    throw new Error("Audio preview is not supported in this browser.");
+  }
+
+  const context = new AudioContextCtor();
+  const noteEvents = plan.notes.map((note) => ({
+    durationSeconds: note.durationBeats * (60 / bpm),
+    frequency: 440 * 2 ** ((degreeToMidi(note, key) - 69) / 12),
+    startSeconds: note.startBeat * (60 / bpm),
+    velocity: note.velocity / 127,
+  }));
+
+  const master = context.createGain();
+  master.gain.value = 0.18;
+  master.connect(context.destination);
+
+  const now = context.currentTime + 0.04;
+  const releaseTail = 1.2;
+  const totalDuration = noteEvents.reduce((max, note) => Math.max(max, note.startSeconds + note.durationSeconds), 0);
+
+  for (const note of noteEvents) {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+
+    oscillator.type = "triangle";
+    oscillator.frequency.value = note.frequency;
+    gain.gain.setValueAtTime(0, now + note.startSeconds);
+    gain.gain.linearRampToValueAtTime(note.velocity * 0.42, now + note.startSeconds + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + note.startSeconds + note.durationSeconds + 0.6);
+
+    oscillator.connect(gain);
+    gain.connect(master);
+    oscillator.start(now + note.startSeconds);
+    oscillator.stop(now + note.startSeconds + note.durationSeconds + releaseTail);
+  }
+
+  window.setTimeout(() => {
+    void context.close();
+  }, Math.ceil((totalDuration + releaseTail + 0.25) * 1000));
 }
 
 function App() {
@@ -322,6 +334,7 @@ function App() {
   const [error, setError] = useState("");
   const [status, setStatus] = useState("Ready to generate a piano MIDI sketch.");
   const [generatedMidi, setGeneratedMidi] = useState<GeneratedMidi | null>(null);
+  const latestPlanRef = useRef<MidiPlan | null>(null);
 
   const selectedKey = useMemo(
     () => KEY_OPTIONS.find((option) => option.id === keyId) ?? KEY_OPTIONS.find((option) => option.id === "D-minor")!,
@@ -392,6 +405,7 @@ function App() {
           url,
         };
       });
+      latestPlanRef.current = normalizedPlan;
 
       setStatus(`Generated ${normalizedPlan.notes.length} piano notes in ${selectedKey.label} at ${bpm} BPM.`);
     } catch (requestError) {
@@ -399,6 +413,23 @@ function App() {
       setStatus("Generation failed.");
     } finally {
       setIsGenerating(false);
+    }
+  }
+
+  async function playPreview() {
+    if (!latestPlanRef.current) {
+      setError("Generate a MIDI file first.");
+      return;
+    }
+
+    setError("");
+    setStatus("Playing piano preview...");
+
+    try {
+      await previewMidiPlan(latestPlanRef.current, bpm, selectedKey);
+    } catch (previewError) {
+      setError(previewError instanceof Error ? previewError.message : "Unable to play preview.");
+      setStatus("Preview failed.");
     }
   }
 
@@ -527,9 +558,14 @@ function App() {
                 {generatedMidi.noteCount} notes • {selectedKey.label} • {bars} bars • {bpm} BPM
               </p>
             </div>
-            <a className="download-link" download={generatedMidi.fileName} href={generatedMidi.url}>
-              Download MIDI
-            </a>
+            <div className="button-row">
+              <button className="ghost-button" onClick={() => void playPreview()} type="button">
+                Play preview
+              </button>
+              <a className="download-link" download={generatedMidi.fileName} href={generatedMidi.url}>
+                Download MIDI
+              </a>
+            </div>
           </div>
         ) : (
           <div className="empty-card">
