@@ -20,7 +20,7 @@ export async function generateMusicData(settings: GenerationSettings): Promise<G
     bars: settings.bars,
     prompt: settings.prompt.trim(),
   };
-
+  console.log("Generate", payload)
   const response = await invoke<unknown>("generate_music_structure", { request: payload });
   const result = generatedMidiDataSchema.safeParse(response);
 
