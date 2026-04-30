@@ -55,7 +55,7 @@ export function TrackCard({ trackName, events, bpm, isPlaying, onPlay, onStop }:
   }
 
   function handleDownload() {
-    downloadTrackMidi(trackName, events, bpm);
+    void downloadTrackMidi(trackName, events, bpm);
   }
 
   return (

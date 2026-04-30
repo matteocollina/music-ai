@@ -1,4 +1,6 @@
 import { Midi } from "@tonejs/midi";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
 import { z } from "zod";
 import type { GeneratedMidiData, MidiChord, MidiNote, TrackName } from "../types/music";
 
@@ -42,7 +44,7 @@ export function formatTrackEvents(events: TrackEvent[]): string[] {
   });
 }
 
-export function downloadTrackMidi(trackName: TrackName, events: TrackEvent[], bpm: number) {
+export async function downloadTrackMidi(trackName: TrackName, events: TrackEvent[], bpm: number) {
   const midi = new Midi();
   midi.header.setTempo(bpm);
   const track = midi.addTrack();
@@ -68,13 +70,21 @@ export function downloadTrackMidi(trackName: TrackName, events: TrackEvent[], bp
     });
   });
 
-  const blob = new Blob([midi.toArray()], { type: "audio/midi" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${trackName}.mid`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  const filePath = await save({
+    defaultPath: `${trackName}.mid`,
+    filters: [
+      {
+        name: "MIDI",
+        extensions: ["mid"],
+      },
+    ],
+  });
+
+  if (!filePath) {
+    return;
+  }
+
+  await writeFile(filePath, midi.toArray());
 }
 
 function formatDuration(duration: number) {
