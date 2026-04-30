@@ -17,10 +17,17 @@ export type MidiChord = {
   velocity: number;
 };
 
+export type ChordProgressionEntry = {
+  bar: number;
+  symbol: string;
+  notes: string[];
+};
+
 export type GeneratedMidiData = {
   bpm: number;
   key: string;
   scale: string;
+  progression: ChordProgressionEntry[];
   tracks: {
     arpeggiator: MidiNote[];
     chords: MidiChord[];

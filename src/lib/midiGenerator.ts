@@ -3,7 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
 import JSZip from "jszip";
 import { z } from "zod";
-import type { GeneratedMidiData, MidiChord, MidiNote, TrackName } from "../types/music";
+import type { ChordProgressionEntry, GeneratedMidiData, MidiChord, MidiNote, TrackName } from "../types/music";
 
 const notePattern = /^[A-G](#|b)?[0-8]$/;
 
@@ -21,10 +21,17 @@ export const midiChordSchema = z.object({
   velocity: z.number().int().min(1).max(127),
 });
 
+export const chordProgressionEntrySchema = z.object({
+  bar: z.number().int().min(1),
+  symbol: z.string().min(1),
+  notes: z.array(z.string().regex(notePattern)).min(1),
+}) satisfies z.ZodType<ChordProgressionEntry>;
+
 export const generatedMidiDataSchema = z.object({
   bpm: z.number().min(40).max(240),
   key: z.string().min(1),
   scale: z.string().min(1),
+  progression: z.array(chordProgressionEntrySchema).min(1),
   tracks: z.object({
     arpeggiator: z.array(midiNoteSchema),
     chords: z.array(midiChordSchema),
