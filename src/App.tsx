@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { SettingsForm } from "./components/SettingsForm";
 import { TrackCard } from "./components/TrackCard";
+import { downloadAllTracksMidi } from "./lib/midiGenerator";
 import { generateMusicData } from "./lib/openai";
 import { playAllTracks, stopPlayback } from "./lib/playback";
 import type { GeneratedMidiData, GenerationSettings, PlaybackMode, TrackName } from "./types/music";
@@ -175,6 +176,13 @@ function App() {
               </button>
               <button type="button" className="secondary-button" onClick={handleStopAll}>
                 Stop generale
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void downloadAllTracksMidi(generatedData.tracks, generatedData.bpm)}
+              >
+                Download tutte
               </button>
             </div>
           </div>

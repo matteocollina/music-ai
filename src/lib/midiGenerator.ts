@@ -1,6 +1,7 @@
 import { Midi } from "@tonejs/midi";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
+import JSZip from "jszip";
 import { z } from "zod";
 import type { GeneratedMidiData, MidiChord, MidiNote, TrackName } from "../types/music";
 
@@ -33,6 +34,7 @@ export const generatedMidiDataSchema = z.object({
 }) satisfies z.ZodType<GeneratedMidiData>;
 
 export type TrackEvent = MidiNote | MidiChord;
+type TrackCollection = GeneratedMidiData["tracks"];
 
 export function formatTrackEvents(events: TrackEvent[]): string[] {
   return events.map((event) => {
@@ -45,6 +47,58 @@ export function formatTrackEvents(events: TrackEvent[]): string[] {
 }
 
 export async function downloadTrackMidi(trackName: TrackName, events: TrackEvent[], bpm: number) {
+  const midi = buildTrackMidi(events, bpm);
+
+  const filePath = await save({
+    defaultPath: `${trackName}.mid`,
+    filters: [
+      {
+        name: "MIDI",
+        extensions: ["mid"],
+      },
+    ],
+  });
+
+  if (!filePath) {
+    return;
+  }
+
+  await writeFile(filePath, midi.toArray());
+}
+
+export async function downloadAllTracksMidi(tracks: TrackCollection, bpm: number) {
+  const zip = new JSZip();
+  const orderedTracks: Array<{ trackName: TrackName; events: TrackEvent[] }> = [
+    { trackName: "arpeggiator", events: tracks.arpeggiator },
+    { trackName: "chords", events: tracks.chords },
+    { trackName: "vocal", events: tracks.vocal },
+    { trackName: "string", events: tracks.string },
+  ];
+
+  orderedTracks.forEach(({ trackName, events }) => {
+    const midi = buildTrackMidi(events, bpm);
+    zip.file(`${trackName}.mid`, midi.toArray());
+  });
+
+  const filePath = await save({
+    defaultPath: "all-tracks.zip",
+    filters: [
+      {
+        name: "ZIP archive",
+        extensions: ["zip"],
+      },
+    ],
+  });
+
+  if (!filePath) {
+    return;
+  }
+
+  const zipBuffer = await zip.generateAsync({ type: "uint8array" });
+  await writeFile(filePath, zipBuffer);
+}
+
+function buildTrackMidi(events: TrackEvent[], bpm: number) {
   const midi = new Midi();
   midi.header.setTempo(bpm);
   const track = midi.addTrack();
@@ -70,21 +124,7 @@ export async function downloadTrackMidi(trackName: TrackName, events: TrackEvent
     });
   });
 
-  const filePath = await save({
-    defaultPath: `${trackName}.mid`,
-    filters: [
-      {
-        name: "MIDI",
-        extensions: ["mid"],
-      },
-    ],
-  });
-
-  if (!filePath) {
-    return;
-  }
-
-  await writeFile(filePath, midi.toArray());
+  return midi;
 }
 
 function formatDuration(duration: number) {
