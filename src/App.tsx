@@ -136,7 +136,7 @@ function App() {
       <section className="hero-panel">
         <div className="hero-copy">
           <span className="eyebrow">Tauri MIDI Composer</span>
-          <h1>Genera quattro tracce MIDI separate da un singolo prompt musicale.</h1>
+          <h1>GenMIDI.</h1>
           <p>
             Definisci API key, BPM, tonalita e mood. L&apos;app usa OpenAI per creare
             arpeggiatore, chords, vocal e string in formato esportabile `.mid`.
