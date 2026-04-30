@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/responses";
 const SYSTEM_PROMPT: &str = "You are a MIDI composer engine. Generate structured MIDI note data only. Return valid JSON only. No markdown, no explanations. First create one coherent chord progression for the full loop, then derive all four tracks from that same harmonic structure. Create four separate MIDI tracks: arpeggiator, chords, vocal, string. The arpeggiator must rhythmically outline the active chord. The chords track must provide a warm harmonic foundation. The vocal track must be sparse, catchy, singable, and motif-driven. The string track must provide sustained cinematic support. Use repetition, variation, motif development, and clear musical phrasing. Avoid random note streams. All tracks must work together harmonically and rhythmically. Keep notes inside the requested key and scale except rare musically justified passing tones. Make the loop resolve naturally into bar one.";
-const MODEL: &str = "gpt-5.2";
+const MODEL: &str = "gpt-5.4";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
