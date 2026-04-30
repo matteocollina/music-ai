@@ -1,6 +1,7 @@
 export type MusicalKey = "C" | "C#" | "D" | "D#" | "E" | "F" | "F#" | "G" | "G#" | "A" | "A#" | "B";
 export type MusicalScale = "major" | "minor" | "dorian" | "phrygian" | "lydian" | "mixolydian";
 export type TrackName = "arpeggiator" | "chords" | "vocal" | "string";
+export type PlaybackMode = "single" | "all";
 
 export type MidiNote = {
   note: string;

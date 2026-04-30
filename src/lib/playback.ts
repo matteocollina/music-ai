@@ -1,20 +1,13 @@
 import * as Tone from "tone";
 import type { TrackEvent } from "./midiGenerator";
-import type { TrackName } from "../types/music";
+import type { GeneratedMidiData, PlaybackMode, TrackName } from "../types/music";
 
-let activeSynth: Tone.PolySynth | null = null;
+let activeSynths: Tone.PolySynth[] = [];
 let activeTrackName: TrackName | null = null;
+let activePlaybackMode: PlaybackMode | null = null;
 
-export async function playTrack(trackName: TrackName, events: TrackEvent[], bpm: number) {
-  await Tone.start();
-  stopPlayback();
-
-  Tone.Transport.cancel();
-  Tone.Transport.stop();
-  Tone.Transport.position = 0;
-  Tone.Transport.bpm.value = bpm;
-
-  activeSynth = new Tone.PolySynth(Tone.Synth, {
+function createSynth(trackName: TrackName) {
+  return new Tone.PolySynth(Tone.Synth, {
     oscillator: {
       type: trackName === "arpeggiator" ? "sawtooth" : trackName === "vocal" ? "triangle" : "sine",
     },
@@ -25,18 +18,26 @@ export async function playTrack(trackName: TrackName, events: TrackEvent[], bpm:
       release: 0.8,
     },
   }).toDestination();
+}
+
+export async function playTrack(trackName: TrackName, events: TrackEvent[], bpm: number) {
+  await Tone.start();
+  stopPlayback();
+
+  Tone.Transport.cancel();
+  Tone.Transport.stop();
+  Tone.Transport.position = 0;
+  Tone.Transport.bpm.value = bpm;
+
+  const synth = createSynth(trackName);
+  activeSynths = [synth];
 
   const secondsPerBeat = 60 / bpm;
 
   events.forEach((event) => {
     const notes = "note" in event ? [event.note] : event.notes;
     Tone.Transport.schedule((time) => {
-      activeSynth?.triggerAttackRelease(
-        notes,
-        event.duration * secondsPerBeat,
-        time,
-        event.velocity / 127,
-      );
+      synth.triggerAttackRelease(notes, event.duration * secondsPerBeat, time, event.velocity / 127);
     }, event.start * secondsPerBeat);
   });
 
@@ -46,6 +47,51 @@ export async function playTrack(trackName: TrackName, events: TrackEvent[], bpm:
   }, endBeat * secondsPerBeat + 0.05);
 
   activeTrackName = trackName;
+  activePlaybackMode = "single";
+  Tone.Transport.start();
+  return endBeat * secondsPerBeat * 1000;
+}
+
+export async function playAllTracks(data: GeneratedMidiData) {
+  await Tone.start();
+  stopPlayback();
+
+  Tone.Transport.cancel();
+  Tone.Transport.stop();
+  Tone.Transport.position = 0;
+  Tone.Transport.bpm.value = data.bpm;
+
+  const tracks: Array<{ trackName: TrackName; events: TrackEvent[] }> = [
+    { trackName: "arpeggiator", events: data.tracks.arpeggiator },
+    { trackName: "chords", events: data.tracks.chords },
+    { trackName: "vocal", events: data.tracks.vocal },
+    { trackName: "string", events: data.tracks.string },
+  ];
+
+  const secondsPerBeat = 60 / data.bpm;
+  let endBeat = 0;
+
+  activeSynths = tracks.map(({ trackName, events }) => {
+    const synth = createSynth(trackName);
+
+    events.forEach((event) => {
+      const notes = "note" in event ? [event.note] : event.notes;
+      endBeat = Math.max(endBeat, event.start + event.duration);
+
+      Tone.Transport.schedule((time) => {
+        synth.triggerAttackRelease(notes, event.duration * secondsPerBeat, time, event.velocity / 127);
+      }, event.start * secondsPerBeat);
+    });
+
+    return synth;
+  });
+
+  Tone.Transport.scheduleOnce(() => {
+    stopPlayback();
+  }, endBeat * secondsPerBeat + 0.05);
+
+  activeTrackName = null;
+  activePlaybackMode = "all";
   Tone.Transport.start();
   return endBeat * secondsPerBeat * 1000;
 }
@@ -53,12 +99,19 @@ export async function playTrack(trackName: TrackName, events: TrackEvent[], bpm:
 export function stopPlayback() {
   Tone.Transport.stop();
   Tone.Transport.cancel();
-  activeSynth?.releaseAll();
-  activeSynth?.dispose();
-  activeSynth = null;
+  activeSynths.forEach((synth) => {
+    synth.releaseAll();
+    synth.dispose();
+  });
+  activeSynths = [];
   activeTrackName = null;
+  activePlaybackMode = null;
 }
 
 export function getActiveTrackName() {
   return activeTrackName;
+}
+
+export function getPlaybackMode() {
+  return activePlaybackMode;
 }

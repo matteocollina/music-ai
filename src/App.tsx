@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { SettingsForm } from "./components/SettingsForm";
 import { TrackCard } from "./components/TrackCard";
 import { generateMusicData } from "./lib/openai";
-import { stopPlayback } from "./lib/playback";
-import type { GeneratedMidiData, GenerationSettings, TrackName } from "./types/music";
+import { playAllTracks, stopPlayback } from "./lib/playback";
+import type { GeneratedMidiData, GenerationSettings, PlaybackMode, TrackName } from "./types/music";
 
 const STORAGE_KEY = "music-ai-settings";
 
@@ -25,6 +25,8 @@ function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTrack, setActiveTrack] = useState<TrackName | null>(null);
+  const [playbackMode, setPlaybackMode] = useState<PlaybackMode | null>(null);
+  const globalStopTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const rawSettings = window.localStorage.getItem(STORAGE_KEY);
@@ -48,6 +50,9 @@ function App() {
 
   useEffect(
     () => () => {
+      if (globalStopTimerRef.current) {
+        window.clearTimeout(globalStopTimerRef.current);
+      }
       stopPlayback();
     },
     [],
@@ -75,6 +80,11 @@ function App() {
     setError(null);
     setGeneratedData(null);
     setActiveTrack(null);
+    setPlaybackMode(null);
+    if (globalStopTimerRef.current) {
+      window.clearTimeout(globalStopTimerRef.current);
+      globalStopTimerRef.current = null;
+    }
     stopPlayback();
 
     try {
@@ -89,6 +99,36 @@ function App() {
     } finally {
       setIsGenerating(false);
     }
+  }
+
+  async function handlePlayAll() {
+    if (!generatedData) {
+      return;
+    }
+
+    if (globalStopTimerRef.current) {
+      window.clearTimeout(globalStopTimerRef.current);
+    }
+
+    const durationMs = await playAllTracks(generatedData);
+    setActiveTrack(null);
+    setPlaybackMode("all");
+
+    globalStopTimerRef.current = window.setTimeout(() => {
+      setPlaybackMode(null);
+      globalStopTimerRef.current = null;
+    }, durationMs + 150);
+  }
+
+  function handleStopAll() {
+    if (globalStopTimerRef.current) {
+      window.clearTimeout(globalStopTimerRef.current);
+      globalStopTimerRef.current = null;
+    }
+
+    stopPlayback();
+    setActiveTrack(null);
+    setPlaybackMode(null);
   }
 
   return (
@@ -122,8 +162,20 @@ function App() {
               <span className="eyebrow">Output</span>
               <h2>Tracce generate</h2>
             </div>
-            <div className="meta-pill">
-              {generatedData.key} {generatedData.scale} · {generatedData.bpm} BPM
+            <div className="results-controls">
+              <div className="meta-pill">
+                {generatedData.key} {generatedData.scale} · {generatedData.bpm} BPM
+              </div>
+              <button
+                type="button"
+                className={`secondary-button ${playbackMode === "all" ? "active" : ""}`}
+                onClick={handlePlayAll}
+              >
+                Play tutte
+              </button>
+              <button type="button" className="secondary-button" onClick={handleStopAll}>
+                Stop generale
+              </button>
             </div>
           </div>
 
@@ -132,33 +184,73 @@ function App() {
               trackName="arpeggiator"
               events={tracks.arpeggiator}
               bpm={generatedData.bpm}
-              isPlaying={activeTrack === "arpeggiator"}
-              onPlay={() => setActiveTrack("arpeggiator")}
-              onStop={() => setActiveTrack(null)}
+              isPlaying={activeTrack === "arpeggiator" || playbackMode === "all"}
+              onPlay={() => {
+                if (globalStopTimerRef.current) {
+                  window.clearTimeout(globalStopTimerRef.current);
+                  globalStopTimerRef.current = null;
+                }
+                setPlaybackMode("single");
+                setActiveTrack("arpeggiator");
+              }}
+              onStop={() => {
+                setActiveTrack(null);
+                setPlaybackMode(null);
+              }}
             />
             <TrackCard
               trackName="chords"
               events={tracks.chords}
               bpm={generatedData.bpm}
-              isPlaying={activeTrack === "chords"}
-              onPlay={() => setActiveTrack("chords")}
-              onStop={() => setActiveTrack(null)}
+              isPlaying={activeTrack === "chords" || playbackMode === "all"}
+              onPlay={() => {
+                if (globalStopTimerRef.current) {
+                  window.clearTimeout(globalStopTimerRef.current);
+                  globalStopTimerRef.current = null;
+                }
+                setPlaybackMode("single");
+                setActiveTrack("chords");
+              }}
+              onStop={() => {
+                setActiveTrack(null);
+                setPlaybackMode(null);
+              }}
             />
             <TrackCard
               trackName="vocal"
               events={tracks.vocal}
               bpm={generatedData.bpm}
-              isPlaying={activeTrack === "vocal"}
-              onPlay={() => setActiveTrack("vocal")}
-              onStop={() => setActiveTrack(null)}
+              isPlaying={activeTrack === "vocal" || playbackMode === "all"}
+              onPlay={() => {
+                if (globalStopTimerRef.current) {
+                  window.clearTimeout(globalStopTimerRef.current);
+                  globalStopTimerRef.current = null;
+                }
+                setPlaybackMode("single");
+                setActiveTrack("vocal");
+              }}
+              onStop={() => {
+                setActiveTrack(null);
+                setPlaybackMode(null);
+              }}
             />
             <TrackCard
               trackName="string"
               events={tracks.string}
               bpm={generatedData.bpm}
-              isPlaying={activeTrack === "string"}
-              onPlay={() => setActiveTrack("string")}
-              onStop={() => setActiveTrack(null)}
+              isPlaying={activeTrack === "string" || playbackMode === "all"}
+              onPlay={() => {
+                if (globalStopTimerRef.current) {
+                  window.clearTimeout(globalStopTimerRef.current);
+                  globalStopTimerRef.current = null;
+                }
+                setPlaybackMode("single");
+                setActiveTrack("string");
+              }}
+              onStop={() => {
+                setActiveTrack(null);
+                setPlaybackMode(null);
+              }}
             />
           </div>
         </section>
