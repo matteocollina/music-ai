@@ -43,5 +43,6 @@ export type GenerationSettings = {
   key: MusicalKey;
   scale: MusicalScale;
   bars: number;
+  creativity: number;
   prompt: string;
 };

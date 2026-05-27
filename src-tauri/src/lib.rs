@@ -7,7 +7,7 @@ const OPENAI_API_URL: &str = "https://api.openai.com/v1/responses";
 const MODEL: &str = "gpt-5.4";
 
 const HARMONY_SYSTEM_PROMPT: &str = r#"
-You are a deterministic melodic techno harmony engine.
+You are an expressive melodic techno harmony engine.
 Return valid JSON only. No markdown, no explanations.
 
 Your job is ONLY to create one coherent chord progression.
@@ -19,12 +19,13 @@ Rules:
 - Use smooth voice leading.
 - Use one chord per bar unless explicitly requested otherwise.
 - The final bar must lead naturally back to bar 1.
+- Create a fresh progression identity for each variation request.
 - Avoid random chromatic chords.
 - Use emotional chord colors only if compatible with the key: minor7, maj7, add9, sus2, sus4.
 "#;
 
 const TRACK_SYSTEM_PROMPT: &str = r#"
-You are a deterministic MIDI track generator.
+You are an expressive MIDI track generator.
 Return valid JSON only. No markdown, no explanations.
 
 You will receive a fixed chord progression.
@@ -37,7 +38,8 @@ Critical rules:
 - Non-chord tones are allowed only as short passing tones that resolve stepwise.
 - Avoid clashes with the active chord.
 - Avoid random note streams.
-- Use repetition, motif development, and small variations.
+- Give each take a distinct contour, phrasing, and emotional arc.
+- Use repetition, motif development, and tasteful variations.
 - Use beats for start and duration.
 "#;
 
@@ -49,7 +51,9 @@ struct GenerateMusicRequest {
     key: String,
     scale: String,
     bars: u16,
+    creativity: f32,
     prompt: String,
+    variation_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,11 +146,20 @@ struct MusicStructure {
     tracks: Tracks,
 }
 
+fn creativity_sampling(creativity: f32) -> (f32, f32) {
+    let normalized = (creativity / 100.0).clamp(0.0, 1.0);
+    let temperature = 0.35 + (normalized * 0.55);
+    let top_p = 0.72 + (normalized * 0.23);
+    (temperature, top_p)
+}
+
 async fn call_openai_json(
     client: &reqwest::Client,
     api_key: &str,
     instructions: &str,
     input: &str,
+    temperature: f32,
+    top_p: f32,
 ) -> Result<String, String> {
     let response = client
         .post(OPENAI_API_URL)
@@ -156,8 +169,8 @@ async fn call_openai_json(
             "model": MODEL,
             "instructions": instructions,
             "input": input,
-            "temperature": 0.25,
-            "top_p": 0.65,
+            "temperature": temperature,
+            "top_p": top_p,
             "text": OpenAiTextConfig {
                 format: OpenAiTextFormat { kind: "json_object" }
             }
@@ -213,6 +226,8 @@ BPM: {bpm}
 Key: {key}
 Scale: {scale}
 Bars: {bars}
+Creative intensity: {creativity}/100
+Variation token: {variation_token}
 Style prompt: {prompt}
 
 Style target:
@@ -220,6 +235,7 @@ Style target:
 - Anyma / Tale Of Us / Afterlife-inspired atmosphere
 - Dark, cinematic, melancholic, futuristic
 - Touching harmonic movement
+- Make this take feel like a fresh interpretation, not the safest default.
 
 Progression rules:
 - One chord per bar.
@@ -228,6 +244,7 @@ Progression rules:
 - Use notes around C3-C5.
 - Use smooth voice leading.
 - Final chord must resolve naturally into the first chord.
+- Use the variation token to explore a different but still musically coherent harmonic path.
 
 Return JSON only:
 {{
@@ -244,10 +261,13 @@ Return JSON only:
         key = request.key,
         scale = request.scale,
         bars = request.bars,
+        creativity = request.creativity.round(),
+        variation_token = request.variation_token,
         prompt = request.prompt,
     );
 
-    let raw = call_openai_json(client, api_key, HARMONY_SYSTEM_PROMPT, &input).await?;
+    let (temperature, top_p) = creativity_sampling(request.creativity);
+    let raw = call_openai_json(client, api_key, HARMONY_SYSTEM_PROMPT, &input, temperature, top_p).await?;
     let parsed: ProgressionResponse =
         serde_json::from_str(&raw).map_err(|_| "OpenAI returned invalid progression JSON.".to_string())?;
 
@@ -274,6 +294,8 @@ BPM: {bpm}
 Key: {key}
 Scale: {scale}
 Bars: {bars}
+Creative intensity: {creativity}/100
+Variation token: {variation_token}
 Style prompt: {prompt}
 
 Fixed chord progression:
@@ -281,6 +303,10 @@ Fixed chord progression:
 
 Track-specific rules:
 {track_rules}
+
+Creative direction:
+- Keep the harmony valid, but avoid the most obvious phrasing.
+- Let the variation token push this take toward a distinct motif and gesture.
 
 Return JSON only:
 {{
@@ -299,12 +325,15 @@ Return JSON only:
         key = request.key,
         scale = request.scale,
         bars = request.bars,
+        creativity = request.creativity.round(),
+        variation_token = request.variation_token,
         prompt = request.prompt,
         progression_json = serde_json::to_string_pretty(progression).unwrap_or_default(),
         track_rules = track_rules,
     );
 
-    let raw = call_openai_json(client, api_key, TRACK_SYSTEM_PROMPT, &input).await?;
+    let (temperature, top_p) = creativity_sampling(request.creativity);
+    let raw = call_openai_json(client, api_key, TRACK_SYSTEM_PROMPT, &input, temperature, top_p).await?;
     let parsed: SingleNoteTrackResponse =
         serde_json::from_str(&raw).map_err(|_| format!("OpenAI returned invalid {track_name} JSON."))?;
 
@@ -327,6 +356,8 @@ BPM: {bpm}
 Key: {key}
 Scale: {scale}
 Bars: {bars}
+Creative intensity: {creativity}/100
+Variation token: {variation_token}
 Style prompt: {prompt}
 
 Fixed chord progression:
@@ -334,6 +365,10 @@ Fixed chord progression:
 
 Track-specific rules:
 {track_rules}
+
+Creative direction:
+- Keep the harmony valid, but avoid the most obvious voicing and rhythm every time.
+- Let the variation token push this take toward a distinct motif and gesture.
 
 Return JSON only:
 {{
@@ -352,12 +387,15 @@ Return JSON only:
         key = request.key,
         scale = request.scale,
         bars = request.bars,
+        creativity = request.creativity.round(),
+        variation_token = request.variation_token,
         prompt = request.prompt,
         progression_json = serde_json::to_string_pretty(progression).unwrap_or_default(),
         track_rules = track_rules,
     );
 
-    let raw = call_openai_json(client, api_key, TRACK_SYSTEM_PROMPT, &input).await?;
+    let (temperature, top_p) = creativity_sampling(request.creativity);
+    let raw = call_openai_json(client, api_key, TRACK_SYSTEM_PROMPT, &input, temperature, top_p).await?;
     let parsed: MultiNoteTrackResponse =
         serde_json::from_str(&raw).map_err(|_| format!("OpenAI returned invalid {track_name} JSON."))?;
 
@@ -626,6 +664,10 @@ async fn generate_music_structure(request: GenerateMusicRequest) -> Result<Value
 
     if request.bars == 0 {
         return Err("Bars must be greater than zero.".into());
+    }
+
+    if !(0.0..=100.0).contains(&request.creativity) {
+        return Err("Creativity must be between 0 and 100.".into());
     }
 
     let client = reqwest::Client::new();

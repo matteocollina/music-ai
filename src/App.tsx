@@ -16,6 +16,7 @@ const defaultSettings: GenerationSettings = {
   key: "C",
   scale: "minor",
   bars: 8,
+  creativity: 78,
   prompt:
     "Deep house emotiva, arpeggiatore veloce, accordi caldi, vocal chop melodico, string pad cinematico",
 };

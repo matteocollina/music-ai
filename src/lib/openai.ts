@@ -8,7 +8,9 @@ type GenerateMusicPayload = {
   key: string;
   scale: string;
   bars: number;
+  creativity: number;
   prompt: string;
+  variationToken: string;
 };
 
 export async function generateMusicData(settings: GenerationSettings): Promise<GeneratedMidiData> {
@@ -18,7 +20,9 @@ export async function generateMusicData(settings: GenerationSettings): Promise<G
     key: settings.key,
     scale: settings.scale,
     bars: settings.bars,
+    creativity: settings.creativity,
     prompt: settings.prompt.trim(),
+    variationToken: crypto.randomUUID(),
   };
   const response = await invoke<unknown>("generate_music_structure", { request: payload });
   const result = generatedMidiDataSchema.safeParse(response);

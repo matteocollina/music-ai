@@ -1,6 +1,6 @@
 # Music AI
 
-Desktop app Tauri per generare quattro tracce MIDI separate da un prompt testuale:
+Desktop app Tauri per generare quattro tracce MIDI separate da un prompt testuale, con variazioni creative ad ogni rigenerazione:
 
 - `arpeggiator`
 - `chords`
@@ -17,9 +17,10 @@ Desktop app Tauri per generare quattro tracce MIDI separate da un prompt testual
 
 ## Funzioni
 
-- form con API key, BPM, tonalita, scala e numero di battute
+- form con API key, BPM, tonalita, scala, creativita e numero di battute
 - salvataggio locale impostazioni MVP via `localStorage`
 - validazione JSON della risposta OpenAI
+- token di variazione automatico per evitare output troppo identici con lo stesso prompt
 - playback singolo per traccia
 - download separato dei file MIDI
 

@@ -94,6 +94,21 @@ export function SettingsForm({ settings, isGenerating, onChange, onSubmit }: Set
       </div>
 
       <label className="field">
+        <span>Creativita {settings.creativity}%</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={settings.creativity}
+          onChange={(event) => patch("creativity", Number(event.currentTarget.value))}
+        />
+        <small className="field-hint">
+          Valori alti producono take piu vari, artistici e meno prevedibili anche con lo stesso prompt.
+        </small>
+      </label>
+
+      <label className="field">
         <span>Prompt musicale</span>
         <textarea
           rows={6}
