@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { generatedMidiDataSchema } from "./midiGenerator";
-import type { GeneratedMidiData, GenerationSettings } from "../types/music";
+import type { GeneratedMidiData, GenerationSettings, ReferenceAnalysis } from "../types/music";
 
 type GenerateMusicPayload = {
   apiKey: string;
@@ -11,6 +11,7 @@ type GenerateMusicPayload = {
   creativity: number;
   prompt: string;
   variationToken: string;
+  referenceAnalysis: ReferenceAnalysis | null;
 };
 
 export async function generateMusicData(settings: GenerationSettings): Promise<GeneratedMidiData> {
@@ -23,6 +24,7 @@ export async function generateMusicData(settings: GenerationSettings): Promise<G
     creativity: settings.creativity,
     prompt: settings.prompt.trim(),
     variationToken: crypto.randomUUID(),
+    referenceAnalysis: settings.referenceAnalysis,
   };
   const response = await invoke<unknown>("generate_music_structure", { request: payload });
   const result = generatedMidiDataSchema.safeParse(response);

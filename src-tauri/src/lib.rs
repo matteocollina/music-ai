@@ -54,6 +54,24 @@ struct GenerateMusicRequest {
     creativity: f32,
     prompt: String,
     variation_token: String,
+    reference_analysis: Option<ReferenceAnalysisInput>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ReferenceAnalysisInput {
+    chord_timeline: Vec<ReferenceChordTimelineEntry>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ReferenceChordTimelineEntry {
+    chord: String,
+    start_time: f32,
+    end_time: f32,
+    confidence: f32,
+    notes: Vec<String>,
+    bar: u16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,6 +171,96 @@ fn creativity_sampling(creativity: f32) -> (f32, f32) {
     (temperature, top_p)
 }
 
+fn hashed_index(seed: &str, salt: &str, len: usize) -> usize {
+    let mut hash: u64 = 1469598103934665603;
+
+    for byte in seed.bytes().chain(salt.bytes()) {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+
+    (hash as usize) % len.max(1)
+}
+
+fn build_reference_context(request: &GenerateMusicRequest, progression: &[ProgressionChord]) -> String {
+    if request.reference_analysis.is_none() {
+        return "No reference audio was provided. Shape the track from the prompt and chord progression only.".to_string();
+    }
+
+    let chord_symbols = progression
+        .iter()
+        .map(|chord| format!("bar {}: {}", chord.bar, chord.symbol))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        "Reference audio mode is active. Reflect the harmonic tension and release implied by this extracted chord path: {}. \
+         Do not clone a stock arp; let bar-to-bar density and contour react to the chord changes.",
+        chord_symbols
+    )
+}
+
+fn build_arpeggiator_rules(request: &GenerateMusicRequest, progression: &[ProgressionChord]) -> String {
+    const RHYTHMIC_PROFILES: &[&str] = &[
+        "Use a syncopated gate pattern with off-beat accents and occasional 1/16 flurries.",
+        "Use a rolling 1/16 pulse with strategic rests every 1 or 2 bars.",
+        "Use a broken 1/8 pattern with occasional doubled pickups before chord changes.",
+        "Use a staggered pattern that alternates sparse bars and denser answer bars.",
+        "Use a driving pulse with repeating accents every 3 notes instead of every beat.",
+    ];
+    const CONTOUR_PROFILES: &[&str] = &[
+        "Contour should climb through the bar, then reset with a lower pickup.",
+        "Contour should bounce between inner chord tones and top extensions.",
+        "Contour should alternate upward sweeps and downward answers across adjacent bars.",
+        "Contour should emphasize wide registral contrast between phrase starts and endings.",
+        "Contour should orbit around one anchor tone, then break away at transitions.",
+    ];
+    const TIMBRE_GESTURES: &[&str] = &[
+        "Favor tight mid-register notes around C4-C5.",
+        "Use mid-high register energy and occasional octave displacement.",
+        "Lean darker with lower-register starts, then open upward at phrase peaks.",
+        "Start compact, then expand the register in later bars.",
+        "Alternate close voicings and octave spread gestures.",
+    ];
+    const VARIATION_MOVES: &[&str] = &[
+        "At least every 2 bars, mutate the motif rhythm or starting chord tone.",
+        "When the harmony changes, answer with a clearly different inversion focus.",
+        "Use one recurring motif, but reshape its ending in each repetition.",
+        "Do not reuse the exact same note order in consecutive bars unless the chord is unchanged and you add accent changes.",
+        "Create a phrase-level evolution from bars 1-4 and a distinct response in later bars.",
+    ];
+
+    let variation_seed = &request.variation_token;
+    let prompt_context = if request.prompt.trim().is_empty() {
+        "No free-text style prompt is active.".to_string()
+    } else {
+        format!("Style prompt to translate into arp behavior: {}.", request.prompt.trim())
+    };
+
+    format!(
+        r#"
+- Hypnotic melodic techno arpeggiator with a clearly identifiable motif.
+- Every note must fit the active chord at its start time, but passing tones from the scale are allowed when they resolve immediately.
+- Use a mix of 1/8, 1/16, dotted values, ties, and rests; avoid a flat machine-gun stream.
+- Do not create independent harmony.
+- Avoid too many octave jumps in a row, but allow occasional register leaps for contrast.
+- Build phrase evolution, not just a single bar loop copied forever.
+- {}
+- {}
+- {}
+- {}
+- {}
+- {}
+"#,
+        RHYTHMIC_PROFILES[hashed_index(variation_seed, "rhythm", RHYTHMIC_PROFILES.len())],
+        CONTOUR_PROFILES[hashed_index(variation_seed, "contour", CONTOUR_PROFILES.len())],
+        TIMBRE_GESTURES[hashed_index(variation_seed, "register", TIMBRE_GESTURES.len())],
+        VARIATION_MOVES[hashed_index(variation_seed, "variation", VARIATION_MOVES.len())],
+        prompt_context,
+        build_reference_context(request, progression),
+    )
+}
+
 async fn call_openai_json(
     client: &reqwest::Client,
     api_key: &str,
@@ -218,6 +326,14 @@ async fn generate_progression(
     api_key: &str,
     request: &GenerateMusicRequest,
 ) -> Result<Vec<ProgressionChord>, String> {
+    if let Some(reference) = &request.reference_analysis {
+        let progression = reference_progression(reference)?;
+
+        if !progression.is_empty() {
+            return Ok(progression);
+        }
+    }
+
     let input = format!(
         r#"
 Create ONLY the chord progression for a loopable melodic techno composition.
@@ -276,6 +392,37 @@ Return JSON only:
     }
 
     Ok(parsed.progression)
+}
+
+fn reference_progression(reference: &ReferenceAnalysisInput) -> Result<Vec<ProgressionChord>, String> {
+    let mut progression = Vec::new();
+
+    for (index, segment) in reference.chord_timeline.iter().enumerate() {
+        if segment.notes.is_empty() {
+            continue;
+        }
+
+        let inferred_bar = if segment.bar == 0 { index as u16 + 1 } else { segment.bar };
+        let bar = inferred_bar.max(1);
+
+        let _duration = (segment.end_time - segment.start_time).max(0.0);
+        let _confidence = segment.confidence;
+
+        progression.push(ProgressionChord {
+            bar,
+            symbol: segment.chord.clone(),
+            notes: segment.notes.clone(),
+        });
+    }
+
+    progression.sort_by_key(|entry| entry.bar);
+    progression.dedup_by(|current, previous| current.bar == previous.bar);
+
+    if progression.is_empty() {
+        return Err("Reference song analysis did not produce a usable chord progression.".to_string());
+    }
+
+    Ok(progression)
 }
 
 async fn generate_single_note_track(
@@ -550,7 +697,12 @@ fn nearest_allowed_note(original: &str, allowed_notes: &[String]) -> String {
         .unwrap_or_else(|| original.to_string())
 }
 
-fn sanitize_single_note(note: &mut SingleNote, progression: &[ProgressionChord], scale_pcs: &HashSet<String>) {
+fn sanitize_single_note(
+    note: &mut SingleNote,
+    progression: &[ProgressionChord],
+    scale_pcs: &HashSet<String>,
+    allow_scale_tones_outside_chord: bool,
+) {
     if let Some(active_chord) = active_chord_for_start(note.start, progression) {
         let chord_pcs: HashSet<String> = active_chord
             .notes
@@ -570,7 +722,13 @@ fn sanitize_single_note(note: &mut SingleNote, progression: &[ProgressionChord],
             .map(|pc| scale_pcs.contains(pc))
             .unwrap_or(false);
 
-        if !is_chord_tone || !is_scale_tone {
+        let keep_note = if allow_scale_tones_outside_chord {
+            is_scale_tone
+        } else {
+            is_chord_tone && is_scale_tone
+        };
+
+        if !keep_note {
             note.note = nearest_allowed_note(&note.note, &active_chord.notes);
         }
     }
@@ -624,12 +782,12 @@ fn sanitize_music_structure(structure: &mut MusicStructure) {
 
     for note in &mut structure.tracks.arpeggiator {
         note.start = note.start.clamp(0.0, total_beats);
-        sanitize_single_note(note, &structure.progression, &scale_pcs);
+        sanitize_single_note(note, &structure.progression, &scale_pcs, true);
     }
 
     for note in &mut structure.tracks.vocal {
         note.start = note.start.clamp(0.0, total_beats);
-        sanitize_single_note(note, &structure.progression, &scale_pcs);
+        sanitize_single_note(note, &structure.progression, &scale_pcs, false);
     }
 
     for chord in &mut structure.tracks.chords {
@@ -674,6 +832,7 @@ async fn generate_music_structure(request: GenerateMusicRequest) -> Result<Value
     let api_key = request.api_key.trim();
 
     let progression = generate_progression(&client, api_key, &request).await?;
+    let arpeggiator_rules = build_arpeggiator_rules(&request, &progression);
 
     let arpeggiator = generate_single_note_track(
         &client,
@@ -681,14 +840,7 @@ async fn generate_music_structure(request: GenerateMusicRequest) -> Result<Value
         &request,
         &progression,
         "arpeggiator",
-        r#"
-- Hypnotic melodic techno arpeggiator.
-- Use ONLY active chord tones.
-- Use 1/8 and 1/16 notes.
-- Repeat a motif with subtle variation.
-- Do not create independent harmony.
-- Avoid too many octave jumps.
-"#,
+        &arpeggiator_rules,
     )
     .await?;
 

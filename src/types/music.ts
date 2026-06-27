@@ -23,6 +23,36 @@ export type ChordProgressionEntry = {
   notes: string[];
 };
 
+export type ExtractedChordSegment = {
+  chord: string;
+  startTime: number;
+  endTime: number;
+  confidence: number;
+  notes: string[];
+  bar: number;
+};
+
+export type StructureSection = {
+  label: string;
+  startTime: number;
+  endTime: number;
+  startBar: number;
+  endBar: number;
+};
+
+export type ReferenceAnalysis = {
+  sourceFileName: string;
+  bpm: number;
+  key: MusicalKey;
+  scale: Extract<MusicalScale, "major" | "minor">;
+  duration: number;
+  estimatedBars: number;
+  confidence: number;
+  confidenceLabel: "high" | "medium" | "low";
+  chordTimeline: ExtractedChordSegment[];
+  structure: StructureSection[];
+};
+
 export type GeneratedMidiData = {
   bpm: number;
   key: string;
@@ -45,4 +75,5 @@ export type GenerationSettings = {
   bars: number;
   creativity: number;
   prompt: string;
+  referenceAnalysis: ReferenceAnalysis | null;
 };

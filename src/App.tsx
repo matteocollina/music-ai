@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { SettingsForm } from "./components/SettingsForm";
 import { TrackCard } from "./components/TrackCard";
+import { analyzeReferenceAudio } from "./lib/audioAnalysis";
 import { downloadAllTracksMidi } from "./lib/midiGenerator";
 import { generateMusicData } from "./lib/openai";
 import { playAllTracks, stopPlayback } from "./lib/playback";
@@ -19,16 +20,67 @@ const defaultSettings: GenerationSettings = {
   creativity: 78,
   prompt:
     "Deep house emotiva, arpeggiatore veloce, accordi caldi, vocal chop melodico, string pad cinematico",
+  referenceAnalysis: null,
 };
 
 function App() {
   const [settings, setSettings] = useState<GenerationSettings>(defaultSettings);
   const [generatedData, setGeneratedData] = useState<GeneratedMidiData | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isAnalyzingReference, setIsAnalyzingReference] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [activeTrack, setActiveTrack] = useState<TrackName | null>(null);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode | null>(null);
   const globalStopTimerRef = useRef<number | null>(null);
+  const settingsRef = useRef(settings);
+
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  async function runGeneration(sourceSettings: GenerationSettings) {
+    if (!sourceSettings.apiKey.trim()) {
+      setError("Inserisci una OpenAI API Key prima di generare le tracce.");
+      return;
+    }
+
+    const effectiveSettings = sourceSettings.referenceAnalysis
+      ? {
+          ...sourceSettings,
+          bpm: sourceSettings.referenceAnalysis.bpm,
+          key: sourceSettings.referenceAnalysis.key,
+          scale: sourceSettings.referenceAnalysis.scale,
+          bars: sourceSettings.referenceAnalysis.estimatedBars,
+          creativity: defaultSettings.creativity,
+          prompt: "",
+        }
+      : sourceSettings;
+
+    setIsGenerating(true);
+    setError(null);
+    setGeneratedData(null);
+    setActiveTrack(null);
+    setPlaybackMode(null);
+    if (globalStopTimerRef.current) {
+      window.clearTimeout(globalStopTimerRef.current);
+      globalStopTimerRef.current = null;
+    }
+    stopPlayback();
+
+    try {
+      const result = await generateMusicData(effectiveSettings);
+      setGeneratedData(result);
+    } catch (generationError) {
+      const message =
+        generationError instanceof Error
+          ? generationError.message
+          : "Errore sconosciuto durante la generazione MIDI.";
+      setError(message);
+    } finally {
+      setIsGenerating(false);
+    }
+  }
 
   useEffect(() => {
     const rawSettings = window.localStorage.getItem(STORAGE_KEY);
@@ -44,6 +96,7 @@ function App() {
         ...savedSettings,
         apiKey: typeof savedSettings.apiKey === "string" ? savedSettings.apiKey : "",
         saveApiKey: savedSettings.saveApiKey ?? true,
+        referenceAnalysis: null,
       }));
     } catch {
       window.localStorage.removeItem(STORAGE_KEY);
@@ -65,42 +118,53 @@ function App() {
   function updateSettings(nextSettings: GenerationSettings) {
     setSettings(nextSettings);
 
+    const persistedSettings = { ...nextSettings, referenceAnalysis: null };
     const payload: Partial<GenerationSettings> = nextSettings.saveApiKey
-      ? nextSettings
-      : { ...nextSettings, apiKey: "" };
+      ? persistedSettings
+      : { ...persistedSettings, apiKey: "" };
 
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
   }
 
-  async function handleGenerate() {
-    if (!settings.apiKey.trim()) {
-      setError("Inserisci una OpenAI API Key prima di generare le tracce.");
+  async function handleReferenceFileChange(file: File | null) {
+    setAnalysisError(null);
+
+    if (!file) {
       return;
     }
 
-    setIsGenerating(true);
-    setError(null);
-    setGeneratedData(null);
-    setActiveTrack(null);
-    setPlaybackMode(null);
-    if (globalStopTimerRef.current) {
-      window.clearTimeout(globalStopTimerRef.current);
-      globalStopTimerRef.current = null;
-    }
-    stopPlayback();
+    setIsAnalyzingReference(true);
 
     try {
-      const result = await generateMusicData(settings);
-      setGeneratedData(result);
-    } catch (generationError) {
+      const analysis = await analyzeReferenceAudio(file);
+      const nextSettings = {
+        ...settingsRef.current,
+        bpm: analysis.bpm,
+        key: analysis.key,
+        scale: analysis.scale,
+        bars: analysis.estimatedBars,
+        referenceAnalysis: analysis,
+      };
+      updateSettings(nextSettings);
+      await runGeneration(nextSettings);
+    } catch (analysisFailure) {
       const message =
-        generationError instanceof Error
-          ? generationError.message
-          : "Errore sconosciuto durante la generazione MIDI.";
-      setError(message);
+        analysisFailure instanceof Error
+          ? analysisFailure.message
+          : "Impossibile analizzare il file audio selezionato.";
+      setAnalysisError(message);
     } finally {
-      setIsGenerating(false);
+      setIsAnalyzingReference(false);
     }
+  }
+
+  function clearReferenceAnalysis() {
+    setAnalysisError(null);
+    updateSettings({ ...settingsRef.current, referenceAnalysis: null });
+  }
+
+  async function handleGenerate() {
+    await runGeneration(settings);
   }
 
   async function handlePlayAll() {
@@ -147,14 +211,24 @@ function App() {
         <SettingsForm
           settings={settings}
           isGenerating={isGenerating}
+          isAnalyzingReference={isAnalyzingReference}
+          analysisError={analysisError}
           onChange={updateSettings}
           onSubmit={handleGenerate}
+          onReferenceFileChange={(file) => void handleReferenceFileChange(file)}
+          onReferenceAnalysisClear={clearReferenceAnalysis}
         />
       </section>
 
       {error ? <div className="status-banner error">{error}</div> : null}
       {isGenerating ? (
         <div className="status-banner loading">Generazione in corso. Sto costruendo le quattro tracce MIDI.</div>
+      ) : null}
+      {settings.referenceAnalysis?.confidenceLabel === "low" ? (
+        <div className="status-banner warning">
+          Progressione reference rilevata con bassa affidabilita. La generazione resta disponibile, ma gli accordi
+          estratti potrebbero non essere perfetti.
+        </div>
       ) : null}
 
       {generatedData && tracks ? (
@@ -168,6 +242,11 @@ function App() {
               <div className="meta-pill">
                 {generatedData.key} {generatedData.scale} · {generatedData.bpm} BPM
               </div>
+              {settings.referenceAnalysis ? (
+                <div className="meta-pill subtle-pill">
+                  Reference chords: {settings.referenceAnalysis.sourceFileName}
+                </div>
+              ) : null}
               <button
                 type="button"
                 className={`secondary-button ${playbackMode === "all" ? "active" : ""}`}
